@@ -54,6 +54,14 @@ class SdIsolateProcessor {
   final _disposedCompleter = Completer<void>();
   bool _disposed = false;
 
+  // stable-diffusion.cpp reports progress from its own worker threads.
+  // A Pointer.fromFunction callback may only run on the isolate's own thread
+  // ("Cannot invoke native callback outside an isolate" -> SIGABRT), so we
+  // use a NativeCallable.listener owned by THIS (main) isolate: it can be
+  // called from any thread and delivers asynchronously, even while the
+  // worker isolate is blocked inside the native call.
+  NativeCallable<ProgressCallbackNative>? _progressCallable;
+
   Future<bool> get modelLoaded => _modelLoadedCompleter.future;
 
   final _progressController = StreamController<ProgressUpdate>.broadcast();
@@ -82,10 +90,18 @@ class SdIsolateProcessor {
 
   Future<void> _spawnIsolate() async {
     try {
+      _progressCallable = NativeCallable<ProgressCallbackNative>.listener(
+        (int step, int steps, double time) {
+          if (_progressController.isClosed) return;
+          _progressController.add(ProgressUpdate(step, steps, time));
+        },
+      );
       _isolate = await Isolate.spawn(
         _isolateEntryPoint,
         {
           'port': _receivePort.sendPort,
+          'progressCallbackAddress':
+              _progressCallable!.nativeFunction.address,
           'modelPath': modelPath,
           'nThreads': nThreads,
           'flashAttn': flashAttn,
@@ -263,6 +279,14 @@ class SdIsolateProcessor {
       });
     }
 
+    // Only free the callback once native code has confirmed it is done;
+    // if the isolate hung, keep it alive (tiny leak) rather than risk a
+    // call into freed memory.
+    if (_disposedCompleter.isCompleted || _sendPort == null) {
+      _progressCallable?.close();
+    }
+    _progressCallable = null;
+
     _receivePort.close();
     _progressController.close();
     _logController.close();
@@ -294,7 +318,13 @@ class SdIsolateProcessor {
     final isolateReceivePort = ReceivePort();
     mainSendPort.send(isolateReceivePort.sendPort);
 
-    SdFfiBindings.setupCallbacks(mainSendPort);
+    // Progress goes straight to the main isolate through a thread-safe
+    // NativeCallable.listener (see SdIsolateProcessor). The native log
+    // callback stays off: its text pointer is only valid during the call,
+    // so it can't be read asynchronously.
+    final progressAddress = args['progressCallbackAddress'] as int? ?? 0;
+    SdFfiBindings.setProgressCallback(Pointer.fromAddress(progressAddress));
+    SdFfiBindings.setLogCallback(Pointer.fromAddress(0));
 
     Pointer<Void>? ctx;
 
