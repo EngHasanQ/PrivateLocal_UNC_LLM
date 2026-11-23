@@ -1024,10 +1024,10 @@ class ChatView extends GetView<ChatController> {
                       iconData = Icons.arrow_upward_rounded;
                       onTap = controller.sendMessage;
                     } else {
-                      // Empty → bare mic glyph
+                      // Empty → inert send glyph (no microphone offline)
                       bgColor = Colors.transparent;
-                      iconData = Icons.mic_none_rounded;
-                      onTap = controller.toggleListening;
+                      iconData = Icons.arrow_upward_rounded;
+                      onTap = null;
                     }
 
                     return GestureDetector(

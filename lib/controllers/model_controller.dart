@@ -694,12 +694,10 @@ class ModelController extends GetxController {
         const taesdUrl =
             'https://huggingface.co/madebyollin/taesd/resolve/main/diffusion_pytorch_model.safetensors';
         final hasTaesd = await _download.isModelDownloaded(taesdFilename);
-        if (!hasTaesd &&
-            !_download.activeDownloads.containsKey(taesdFilename)) {
-          print('[ModelController] TAESD not found, downloading...');
-          // On Android this only starts a background download and returns
-          // immediately, so the file may not exist yet.
-          await _download.downloadModel(url: taesdUrl, filename: taesdFilename);
+        // Offline build: no auto-download. Import a file named
+        // taesd.safetensors to get the fast decoder.
+        if (!hasTaesd) {
+          print('[ModelController] TAESD not imported ($taesdUrl), using standard VAE');
         }
         // Only hand sd.cpp a TAESD path that is fully on disk; a missing
         // file makes the whole model load fail on every backend.

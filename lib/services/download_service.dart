@@ -6,7 +6,6 @@ import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import '../controllers/model_controller.dart';
 import '../core/ui.dart';
-import 'update_service.dart';
 
 import 'download_native.dart' if (dart.library.html) 'download_web.dart'
     as platform_dl;
@@ -98,15 +97,8 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
           final speed = (data['bytesPerSecond'] as num).toDouble();
           final status = data['status'] as String;
 
-          // App update downloads are handled by UpdateService, not the
-          // model download list.
-          if (filename.startsWith('update:')) {
-            if (Get.isRegistered<UpdateService>()) {
-              Get.find<UpdateService>().onNativeProgress(
-                  filename.substring(7), downloaded, total, status);
-            }
-            return;
-          }
+          // Offline build: there are no app-update downloads.
+          if (filename.startsWith('update:')) return;
 
           var progress = activeDownloads[filename];
           if (progress == null &&
@@ -266,6 +258,10 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
   }) async {
     if (kIsWeb) return 'ERROR: Downloading models is not supported on web.';
 
+    // Offline build: the app never downloads anything. Import model files
+    // from the phone's storage instead.
+    return 'ERROR: This offline build cannot download. Import the file instead.';
+    // ignore: dead_code
     final downloadProgress = DownloadProgress(filename: filename);
     activeDownloads[filename] = downloadProgress;
 

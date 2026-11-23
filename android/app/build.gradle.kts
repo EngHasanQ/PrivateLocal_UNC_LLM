@@ -26,11 +26,6 @@ if (isReleaseBuild && !hasReleaseKeystore && !allowDebugReleaseSigning) {
     )
 }
 
-if (file("google-services.json").exists()) {
-    apply(plugin = "com.google.gms.google-services")
-    apply(plugin = "com.google.firebase.crashlytics")
-}
-
 android {
     namespace = "com.orailnoor.privatelm"
     compileSdk = flutter.compileSdkVersion
@@ -55,7 +50,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.orailnoor.privatelm"
+        // Own application ID so this build never collides with / updates over
+        // the upstream PrivateLM app.
+        applicationId = "sa.orkacode.privatelocal"
         minSdk = 28
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

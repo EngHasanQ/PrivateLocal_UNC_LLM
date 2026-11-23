@@ -90,20 +90,6 @@ class MainActivity : FlutterActivity() {
                     val destination = File(modelsDir, sanitizeFilename(displayNameFor(uri)))
                     copyUriToModel(uri, destination, size, destination.exists())
                 }
-                "downloadToDownloads" -> {
-                    val url = call.argument<String>("url")
-                    val filename = call.argument<String>("filename")
-                    if (url.isNullOrBlank() || filename.isNullOrBlank()) {
-                        result.error("INVALID_DOWNLOAD", "Model URL or filename is missing.", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        val downloadId = enqueueDownloadToDownloads(url, filename)
-                        result.success(mapOf("downloadId" to downloadId, "filename" to sanitizeFilename(filename)))
-                    } catch (e: Exception) {
-                        result.error("DOWNLOAD_FAILED", e.message ?: e.toString(), null)
-                    }
-                }
                 "cancelDownloadToDownloads" -> {
                     val downloadId = (call.argument<Any>("downloadId") as? Number)?.toLong()
                     if (downloadId != null) {
@@ -116,21 +102,6 @@ class MainActivity : FlutterActivity() {
                         }
                     } else {
                         result.error("INVALID_DOWNLOAD_ID", "Download ID is missing.", null)
-                    }
-                }
-                "downloadModelInApp" -> {
-                    val url = call.argument<String>("url")
-                    val filename = call.argument<String>("filename")
-                    val modelsDir = call.argument<String>("modelsDir")
-                    if (url.isNullOrBlank() || filename.isNullOrBlank() || modelsDir.isNullOrBlank()) {
-                        result.error("INVALID_DOWNLOAD", "URL, filename, or modelsDir is missing.", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        val downloadId = enqueueDownloadInApp(url, filename, modelsDir)
-                        result.success(mapOf("downloadId" to downloadId, "filename" to sanitizeFilename(filename)))
-                    } catch (e: Exception) {
-                        result.error("DOWNLOAD_FAILED", e.message ?: e.toString(), null)
                     }
                 }
                 "cancelDownloadInApp" -> {
@@ -184,19 +155,6 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
-                "downloadUpdate" -> {
-                    val url = call.argument<String>("url")
-                    val filename = call.argument<String>("filename")
-                    if (url.isNullOrBlank() || filename.isNullOrBlank()) {
-                        result.error("BAD_ARGS", "url and filename are required", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        result.success(enqueueUpdateDownload(url, filename))
-                    } catch (e: Exception) {
-                        result.error("DOWNLOAD_FAILED", e.message ?: e.toString(), null)
-                    }
-                }
                 "cancelUpdateDownload" -> {
                     val id = (call.argument<Any>("downloadId") as? Number)?.toLong()
                     if (id != null) {
@@ -204,18 +162,6 @@ class MainActivity : FlutterActivity() {
                         manager.remove(id)
                     }
                     result.success(null)
-                }
-                "installApk" -> {
-                    val path = call.argument<String>("path")
-                    if (path.isNullOrBlank() || !File(path).exists()) {
-                        result.error("BAD_ARGS", "APK not found", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        result.success(installApk(File(path)))
-                    } catch (e: Exception) {
-                        result.error("INSTALL_FAILED", e.message ?: e.toString(), null)
-                    }
                 }
                 "restartApp" -> {
                     restartApp()

@@ -66,12 +66,13 @@ class ModelView extends GetView<ModelController> {
         },
         color: t.accent,
         child: Obx(() {
-          final scope = controller.modelScope.value;
+          // Offline build: only the on-phone library. No catalogue
+          // downloads and no cloud providers.
+          controller.modelScope.value;
+          const scope = 'local';
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
             children: [
-              _buildScopeToggle(context),
-              const SizedBox(height: 16),
               _buildActiveModelBanner(context),
               _buildActiveDownloadsBanner(context),
               if (scope == 'local') ...[
@@ -192,13 +193,10 @@ class ModelView extends GetView<ModelController> {
     return EmptyState(
       icon: Icons.download_rounded,
       title: 'No models on this phone yet',
-      message: 'Download one from Browse, or import a model file.',
+      message: 'Download a model file on your phone (for example from '
+          'HuggingFace in your browser), then import it here. The app itself '
+          'never goes online.',
       action: Wrap(spacing: 8, children: [
-        PillButton(
-          label: 'Browse models',
-          primary: true,
-          onPressed: () => controller.modelScope.value = 'browse',
-        ),
         _buildLocalActions(context),
       ]),
     );

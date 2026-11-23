@@ -140,9 +140,9 @@ class SettingsController extends GetxController {
   void _loadSettings() {
     final savedTheme = _hive.getSetting<String>('theme_mode');
     themeMode.value = _themeModeFromString(savedTheme);
-    inferenceMode.value = _hive.getSetting(AppConstants.keyInferenceMode,
-            defaultValue: 'local') ??
-        'local';
+    // Offline build: inference is always on-device.
+    inferenceMode.value = 'local';
+    _hive.setSetting(AppConstants.keyInferenceMode, 'local');
     cloudProvider.value = _hive.getSetting(AppConstants.keyCloudProvider,
             defaultValue: 'openrouter') ??
         'openrouter';
@@ -341,6 +341,8 @@ class SettingsController extends GetxController {
   }
 
   Future<void> setInferenceMode(String mode) async {
+    // Offline build: cloud mode is disabled; always stay on-device.
+    mode = 'local';
     inferenceMode.value = mode;
     await _hive.setSetting(AppConstants.keyInferenceMode, mode);
   }
