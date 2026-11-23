@@ -20,6 +20,7 @@ import 'services/download_service.dart';
 import 'services/device_info_service.dart';
 import 'services/local_image_service.dart';
 import 'services/app_log_service.dart';
+import 'services/crash_notice.dart';
 import 'services/image_generation_notification_service.dart';
 import 'core/constants.dart';
 
@@ -117,6 +118,8 @@ void main() {
     // Apply system UI after frame is rendered so Get.mediaQuery is available
     WidgetsBinding.instance.addPostFrameCallback((_) {
       settingsController.setThemeMode(settingsController.themeMode.value);
+      // Show why the app died last time, if it crashed (stays on-device).
+      Future.delayed(const Duration(milliseconds: 800), CrashNotice.showIfCrashed);
     });
   }, (error, stack) async {
     if (Get.isRegistered<AppLogService>()) {

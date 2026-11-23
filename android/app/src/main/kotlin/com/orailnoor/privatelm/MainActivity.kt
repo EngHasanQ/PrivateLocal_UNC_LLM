@@ -37,11 +37,70 @@ class MainActivity : FlutterActivity() {
     private var pendingModelsDir: String? = null
     private val monitoredInAppDownloads = ConcurrentHashMap.newKeySet<Long>()
 
+    /**
+     * Why did the app last die? Android keeps this (API 30+), so a crash
+     * inside native code (llama.cpp / Vulkan) can be shown on the next start.
+     * Everything stays on the phone.
+     */
+    private fun lastExitInfo(): Map<String, Any?>? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        return try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val info = am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull()
+                ?: return null
+            val reason = when (info.reason) {
+                android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
+                android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native_crash"
+                android.app.ApplicationExitInfo.REASON_ANR -> "anr"
+                android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "low_memory"
+                android.app.ApplicationExitInfo.REASON_SIGNALED -> "signaled"
+                android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive_resource"
+                else -> "other_${info.reason}"
+            }
+            var trace = ""
+            try {
+                info.traceInputStream?.use { input ->
+                    val bytes = input.readBytes()
+                    // Tombstones are binary; keep the readable parts
+                    // (function and library names).
+                    val sb = StringBuilder()
+                    val run = StringBuilder()
+                    for (b in bytes) {
+                        val c = b.toInt() and 0xff
+                        if (c in 32..126) {
+                            run.append(c.toChar())
+                        } else {
+                            if (run.length >= 6) sb.append(run).append('\n')
+                            run.setLength(0)
+                        }
+                        if (sb.length > 6000) break
+                    }
+                    if (run.length >= 6) sb.append(run)
+                    trace = sb.toString()
+                }
+            } catch (_: Throwable) {}
+            mapOf(
+                "reason" to reason,
+                "description" to (info.description ?: ""),
+                "status" to info.status,
+                "timestamp" to info.timestamp,
+                "pss" to info.pss,
+                "rss" to info.rss,
+                "trace" to trace.take(6000),
+            )
+        } catch (e: Throwable) {
+            mapOf("reason" to "error", "description" to (e.message ?: ""), "timestamp" to 0L)
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         importChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, importChannelName)
         importChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
+                "lastExitInfo" -> {
+                    result.success(lastExitInfo())
+                }
                 "pickAndImportModel" -> {
                     if (pendingImportResult != null) {
                         result.error("IMPORT_BUSY", "Another model import is already running.", null)

@@ -102,11 +102,25 @@ class InferenceService extends GetxService {
       final cpuOnly = liteRtMode == 'cpu_safe';
       final forceLiteRtCpu = isLiteRt && cpuOnly;
       final shouldTryLiteRtGpu = isLiteRt && !cpuOnly;
-      final allowGgufGpu = !isLiteRt && !cpuOnly;
-      // Clear crash state left by older versions of the app.
+
+      // GPU crash guard (offline build): a GPU (Vulkan) load that kills the
+      // app leaves the "pending" flag set. Next time we stay on the CPU
+      // for chat models, permanently, unless the user resets it by picking
+      // "GPU fast" again in Settings.
+      final ggufGpuCrashed = _hive.getSetting<bool>(
+            AppConstants.keyGgufGpuPending,
+            defaultValue: false,
+          ) ??
+          false;
+      if (ggufGpuCrashed) {
+        print(
+            '[Inference] Previous GPU load crashed the app; using CPU for chat models');
+        await _hive.setSetting(AppConstants.keyLiteRtPerformanceMode, 'cpu_safe');
+      }
+      final allowGgufGpu = !isLiteRt && !cpuOnly && !ggufGpuCrashed;
+      await _hive.setSetting(AppConstants.keyGgufGpuPending, false);
       await _hive.setSetting(AppConstants.keyLiteRtGpuCrashDetected, false);
       await _hive.setSetting(AppConstants.keyLiteRtGpuLoadPending, false);
-      await _hive.setSetting(AppConstants.keyGgufGpuPending, false);
 
       await unloadModel();
       isLoadingModel.value = true;
@@ -141,6 +155,10 @@ class InferenceService extends GetxService {
 
       final requestedModelName = modelName ?? modelPath.split('/').last;
       var activeModelName = requestedModelName;
+      final ggufGpuAttempt = allowGgufGpu && clusterWorkers == 0;
+      if (ggufGpuAttempt) {
+        await _hive.setSetting(AppConstants.keyGgufGpuPending, true);
+      }
       var result = await _loadModelOnEngine(
         modelPath: modelPath,
         modelRuntime: modelRuntime,
@@ -152,9 +170,11 @@ class InferenceService extends GetxService {
         clearLiteRtCache: contextChanged,
         tryLiteRtGpu: shouldTryLiteRtGpu,
         enableLiteRtVision: enableLiteRtVision,
-        allowGgufGpu: allowGgufGpu && clusterWorkers == 0,
+        allowGgufGpu: ggufGpuAttempt,
         mmprojPath: mmprojPath,
       );
+      // Survived the GPU load: clear the crash marker.
+      await _hive.setSetting(AppConstants.keyGgufGpuPending, false);
 
       if (!result.success) {
         isModelLoaded.value = false;
