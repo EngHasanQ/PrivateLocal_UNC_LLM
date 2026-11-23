@@ -146,7 +146,7 @@ jobs:
           OUT="dist/PrivateLocal-${VERSION}-build${GITHUB_RUN_NUMBER}-arm64.apk"
           cp "$APK" "$OUT"
           SHA=$(sha256sum "$OUT" | awk '{print $1}')
-          CERT=$(grep -m1 "SHA-256 digest" signer.txt | awk -F': ' '{print $2}')
+          CERT=$(grep -m1 "certificate SHA-256 digest:" signer.txt | sed "s/.*digest: //")
           echo "APK_PATH=$OUT" >> "$GITHUB_ENV"
           echo "APK_SHA256=$SHA" >> "$GITHUB_ENV"
           echo "CERT_SHA256=$CERT" >> "$GITHUB_ENV"
