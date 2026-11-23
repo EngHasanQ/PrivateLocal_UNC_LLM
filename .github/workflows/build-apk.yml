@@ -70,13 +70,31 @@ jobs:
           } > android/key.properties
 
       - name: Flutter dependencies
-        run: flutter pub get
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee pubget.log || {
+            echo "::error title=pub get failed::$(tail -40 pubget.log | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          }
 
-      - name: Static analysis (report only)
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
+      - name: Static analysis (report errors as annotations)
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings > analyze.txt 2>&1 || true
+          grep -E "^\s*error " analyze.txt | head -40 > analyze_errors.txt || true
+          if [ -s analyze_errors.txt ]; then
+            echo "::error title=Dart analyzer errors::$(sed ':a;N;$!ba;s/\n/%0A/g' analyze_errors.txt)"
+          fi
+          tail -5 analyze.txt
 
       - name: Build release APK (arm64)
-        run: flutter build apk --release --split-per-abi --target-platform android-arm64
+        run: |
+          set -o pipefail
+          flutter build apk --release --split-per-abi --target-platform android-arm64 2>&1 | tee build.log || {
+            grep -nE "error|Error|FAILURE|What went wrong|Exception|failed" build.log | grep -v "^.*warning" | tail -60 > build_errors.txt || true
+            echo "::error title=Build failed (filtered)::$(sed ':a;N;$!ba;s/\n/%0A/g' build_errors.txt | cut -c1-60000)"
+            echo "::error title=Build failed (tail)::$(tail -40 build.log | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-60000)"
+            exit 1
+          }
 
       - name: Verify the APK is offline and signed correctly
         run: |
