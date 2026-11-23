@@ -49,6 +49,14 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/node_modules || true
           df -h /
 
+      - name: Modern glslc for llama.cpp Vulkan shaders
+        # The NDK's glslc is too old for ggml-vulkan's cooperative-matrix
+        # shaders; the plugin's CMake prefers a system glslc.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq glslc
+          glslc --version
+
       - name: Release signing key (from repository secrets)
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
