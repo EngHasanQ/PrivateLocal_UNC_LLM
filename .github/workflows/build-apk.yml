@@ -53,9 +53,21 @@ jobs:
         # The NDK's glslc is too old for ggml-vulkan's cooperative-matrix
         # shaders; the plugin's CMake prefers a system glslc.
         run: |
+          set -e
+          FT=local_plugins/llama_flutter_android/android/src/main/cpp/llama.cpp/ggml/src/ggml-vulkan/vulkan-shaders/feature-tests/coopmat.comp
           sudo apt-get update -qq
-          sudo apt-get install -y -qq glslc
-          glslc --version
+          sudo apt-get install -y -qq glslc || true
+          if command -v glslc >/dev/null && glslc -fshader-stage=compute --target-env=vulkan1.3 "$FT" -o /tmp/ft.spv; then
+            echo "Ubuntu glslc supports cooperative matrix"
+            sudo ln -sf "$(command -v glslc)" /usr/local/bin/glslc
+          else
+            echo "Ubuntu glslc too old; fetching the latest LunarG Vulkan SDK glslc"
+            curl -fsSL -o /tmp/vksdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz
+            mkdir -p /tmp/vksdk && tar -xJf /tmp/vksdk.tar.xz -C /tmp/vksdk --wildcards '*/x86_64/bin/glslc'
+            sudo install -m 755 "$(find /tmp/vksdk -name glslc -type f | head -1)" /usr/local/bin/glslc
+            /usr/local/bin/glslc -fshader-stage=compute --target-env=vulkan1.3 "$FT" -o /tmp/ft.spv
+          fi
+          /usr/local/bin/glslc --version
 
       - name: Release signing key (from repository secrets)
         env:
