@@ -9,7 +9,6 @@ import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:uuid/uuid.dart';
 import 'package:gal/gal.dart';
 import '../controllers/settings_controller.dart';
@@ -87,10 +86,10 @@ class ChatController extends GetxController {
   final imageGenStartTime = Rxn<DateTime>();
   final imageGenDecoding = false.obs;
 
-  // Speech-to-text
+  // Speech-to-text is removed in the offline build (Android speech
+  // recognition can send audio to online services, and needs the mic).
   final isListening = false.obs;
   final sttAvailable = false.obs;
-  final _speech = stt.SpeechToText();
 
   final textController = TextEditingController();
   final inputFocus = FocusNode();
@@ -111,53 +110,10 @@ class ChatController extends GetxController {
             defaultValue: false) ??
         false;
     loadSessions();
-    _initSpeech();
-  }
-
-  Future<void> _initSpeech() async {
-    try {
-      sttAvailable.value = await _speech.initialize(
-        onError: (_) => isListening.value = false,
-        onStatus: (status) {
-          if (status == 'done' || status == 'notListening') {
-            isListening.value = false;
-          }
-        },
-      );
-    } catch (_) {
-      sttAvailable.value = false;
-    }
   }
 
   Future<void> toggleListening() async {
-    try {
-      if (isListening.value) {
-        await _speech.stop();
-        isListening.value = false;
-        return;
-      }
-      if (!sttAvailable.value) {
-        try {
-          final ok = await _speech.initialize();
-          sttAvailable.value = ok;
-        } catch (_) {
-          sttAvailable.value = false;
-        }
-        if (!sttAvailable.value) return;
-      }
-      await _speech.listen(
-        onResult: (result) {
-          textController.text = result.recognizedWords;
-          inputText.value = result.recognizedWords;
-        },
-        listenFor: const Duration(seconds: 60),
-        pauseFor: const Duration(seconds: 4),
-        localeId: 'en_US',
-      );
-      isListening.value = true;
-    } catch (_) {
-      isListening.value = false;
-    }
+    isListening.value = false;
   }
 
   @override

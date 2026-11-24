@@ -81,7 +81,9 @@ class LocalImageService extends GetxService {
         '[LocalImageService] Creating SdIsolateProcessor (backend=${backend.displayName}, quant=${currentQuantization.value.displayName})...');
     _processor = SdIsolateProcessor(
       modelPath: modelPath,
-      nThreads: 0,
+      // Big cores only: mixing in the slow efficiency cores makes every
+      // ggml step wait for them.
+      nThreads: 4,
       flashAttn: !isGpuBackend,
       vaeTiling: true,
       taesdPath: taesdPath,
@@ -350,12 +352,24 @@ class LocalImageService extends GetxService {
         latestLog.value = log.message;
       });
 
+      // Few-step distilled models (LCM / Turbo / Lightning / Hyper) must use
+      // their own sampler with CFG ~1. With the default Euler A + CFG 7 they
+      // produce noise/stripes, and CFG > 1 also doubles the work per step.
+      final nameLower = loadedModelName.value.toLowerCase();
+      final isLcm = nameLower.contains('lcm');
+      final isFewStep = isLcm ||
+          nameLower.contains('turbo') ||
+          nameLower.contains('lightning') ||
+          nameLower.contains('hyper');
       final result = await _processor!.generate(
         prompt: prompt,
         width: imageSize,
         height: imageSize,
         steps: effectiveSteps,
-        // Future: expose width, height, seed, cfg, negativePrompt, sampleMethod from settings
+        cfgScale: isFewStep ? 1.0 : 7.0,
+        sampleMethod: isLcm
+            ? SampleMethod.lcm
+            : (isFewStep ? SampleMethod.euler : SampleMethod.eulerA),
       );
 
       await progressSub.cancel();

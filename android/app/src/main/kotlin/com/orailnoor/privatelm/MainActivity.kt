@@ -37,11 +37,70 @@ class MainActivity : FlutterActivity() {
     private var pendingModelsDir: String? = null
     private val monitoredInAppDownloads = ConcurrentHashMap.newKeySet<Long>()
 
+    /**
+     * Why did the app last die? Android keeps this (API 30+), so a crash
+     * inside native code (llama.cpp / Vulkan) can be shown on the next start.
+     * Everything stays on the phone.
+     */
+    private fun lastExitInfo(): Map<String, Any?>? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        return try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val info = am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull()
+                ?: return null
+            val reason = when (info.reason) {
+                android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
+                android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native_crash"
+                android.app.ApplicationExitInfo.REASON_ANR -> "anr"
+                android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "low_memory"
+                android.app.ApplicationExitInfo.REASON_SIGNALED -> "signaled"
+                android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive_resource"
+                else -> "other_${info.reason}"
+            }
+            var trace = ""
+            try {
+                info.traceInputStream?.use { input ->
+                    val bytes = input.readBytes()
+                    // Tombstones are binary; keep the readable parts
+                    // (function and library names).
+                    val sb = StringBuilder()
+                    val run = StringBuilder()
+                    for (b in bytes) {
+                        val c = b.toInt() and 0xff
+                        if (c in 32..126) {
+                            run.append(c.toChar())
+                        } else {
+                            if (run.length >= 6) sb.append(run).append('\n')
+                            run.setLength(0)
+                        }
+                        if (sb.length > 6000) break
+                    }
+                    if (run.length >= 6) sb.append(run)
+                    trace = sb.toString()
+                }
+            } catch (_: Throwable) {}
+            mapOf(
+                "reason" to reason,
+                "description" to (info.description ?: ""),
+                "status" to info.status,
+                "timestamp" to info.timestamp,
+                "pss" to info.pss,
+                "rss" to info.rss,
+                "trace" to trace.take(6000),
+            )
+        } catch (e: Throwable) {
+            mapOf("reason" to "error", "description" to (e.message ?: ""), "timestamp" to 0L)
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         importChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, importChannelName)
         importChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
+                "lastExitInfo" -> {
+                    result.success(lastExitInfo())
+                }
                 "pickAndImportModel" -> {
                     if (pendingImportResult != null) {
                         result.error("IMPORT_BUSY", "Another model import is already running.", null)
@@ -90,20 +149,6 @@ class MainActivity : FlutterActivity() {
                     val destination = File(modelsDir, sanitizeFilename(displayNameFor(uri)))
                     copyUriToModel(uri, destination, size, destination.exists())
                 }
-                "downloadToDownloads" -> {
-                    val url = call.argument<String>("url")
-                    val filename = call.argument<String>("filename")
-                    if (url.isNullOrBlank() || filename.isNullOrBlank()) {
-                        result.error("INVALID_DOWNLOAD", "Model URL or filename is missing.", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        val downloadId = enqueueDownloadToDownloads(url, filename)
-                        result.success(mapOf("downloadId" to downloadId, "filename" to sanitizeFilename(filename)))
-                    } catch (e: Exception) {
-                        result.error("DOWNLOAD_FAILED", e.message ?: e.toString(), null)
-                    }
-                }
                 "cancelDownloadToDownloads" -> {
                     val downloadId = (call.argument<Any>("downloadId") as? Number)?.toLong()
                     if (downloadId != null) {
@@ -116,21 +161,6 @@ class MainActivity : FlutterActivity() {
                         }
                     } else {
                         result.error("INVALID_DOWNLOAD_ID", "Download ID is missing.", null)
-                    }
-                }
-                "downloadModelInApp" -> {
-                    val url = call.argument<String>("url")
-                    val filename = call.argument<String>("filename")
-                    val modelsDir = call.argument<String>("modelsDir")
-                    if (url.isNullOrBlank() || filename.isNullOrBlank() || modelsDir.isNullOrBlank()) {
-                        result.error("INVALID_DOWNLOAD", "URL, filename, or modelsDir is missing.", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        val downloadId = enqueueDownloadInApp(url, filename, modelsDir)
-                        result.success(mapOf("downloadId" to downloadId, "filename" to sanitizeFilename(filename)))
-                    } catch (e: Exception) {
-                        result.error("DOWNLOAD_FAILED", e.message ?: e.toString(), null)
                     }
                 }
                 "cancelDownloadInApp" -> {
@@ -184,19 +214,6 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
-                "downloadUpdate" -> {
-                    val url = call.argument<String>("url")
-                    val filename = call.argument<String>("filename")
-                    if (url.isNullOrBlank() || filename.isNullOrBlank()) {
-                        result.error("BAD_ARGS", "url and filename are required", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        result.success(enqueueUpdateDownload(url, filename))
-                    } catch (e: Exception) {
-                        result.error("DOWNLOAD_FAILED", e.message ?: e.toString(), null)
-                    }
-                }
                 "cancelUpdateDownload" -> {
                     val id = (call.argument<Any>("downloadId") as? Number)?.toLong()
                     if (id != null) {
@@ -204,18 +221,6 @@ class MainActivity : FlutterActivity() {
                         manager.remove(id)
                     }
                     result.success(null)
-                }
-                "installApk" -> {
-                    val path = call.argument<String>("path")
-                    if (path.isNullOrBlank() || !File(path).exists()) {
-                        result.error("BAD_ARGS", "APK not found", null)
-                        return@setMethodCallHandler
-                    }
-                    try {
-                        result.success(installApk(File(path)))
-                    } catch (e: Exception) {
-                        result.error("INSTALL_FAILED", e.message ?: e.toString(), null)
-                    }
                 }
                 "restartApp" -> {
                     restartApp()

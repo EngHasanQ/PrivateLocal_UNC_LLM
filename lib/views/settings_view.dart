@@ -7,12 +7,9 @@ import '../widgets/home_empty_state.dart' show providerLabel;
 import '../services/inference_service.dart';
 import '../services/hive_service.dart';
 import '../services/local_image_service.dart';
-import '../services/update_service.dart';
 import '../services/device_info_service.dart';
 import '../services/device_info_native.dart' as platform_info;
 import '../ffi/sd_ffi_bindings.dart';
-import '../services/cluster_service.dart';
-import 'cluster_view.dart';
 import 'log_view.dart';
 import '../core/haptics.dart';
 
@@ -29,8 +26,6 @@ class SettingsView extends GetView<SettingsController> {
       appBar: appScreenBar(context, title: 'Settings'),
       body: Obx(() {
         final device = Get.find<DeviceInfoService>();
-        final showUpdates =
-            UpdateService.isSupported && Get.isRegistered<UpdateService>();
         return ListView(
           padding: kPagePadding,
           children: [
@@ -61,9 +56,7 @@ class SettingsView extends GetView<SettingsController> {
                 context,
                 icon: Icons.memory_rounded,
                 title: 'Inference mode',
-                value: controller.inferenceMode.value == 'local'
-                    ? 'Local'
-                    : 'Cloud',
+                value: 'Local (offline)',
                 builder: (ctx) => _buildInferenceGroup(ctx),
               ),
               _navRow(
@@ -112,24 +105,9 @@ class SettingsView extends GetView<SettingsController> {
                     : 'GPU',
                 builder: (ctx) => _buildImageGenerationGroup(ctx),
               ),
-              if (Get.isRegistered<ClusterService>())
-                AppRow(
-                  icon: Icons.hub_outlined,
-                  title: 'Phone cluster',
-                  trailing: Text(
-                      switch (Get.find<ClusterService>().role) {
-                        ClusterRole.master => 'Master',
-                        ClusterRole.worker => 'Worker',
-                        ClusterRole.off => 'Off',
-                      },
-                      style: AppTokens.of(context).caption.copyWith(fontSize: 14)),
-                  chevron: true,
-                  onTap: () => Get.to(() => const ClusterView()),
-                ),
             ]),
             const SectionHeader('About'),
             AppGroup(dividerIndent: 60, children: [
-              if (showUpdates) _buildUpdatesRow(context),
               _navRow(
                 context,
                 icon: Icons.smartphone_rounded,
@@ -231,13 +209,6 @@ class SettingsView extends GetView<SettingsController> {
         selected: controller.inferenceMode.value == 'local',
         onTap: () => controller.setInferenceMode('local'),
       ),
-      AppRow(
-        icon: Icons.cloud_outlined,
-        title: 'Cloud API',
-        subtitle: providerLabel(controller),
-        selected: controller.inferenceMode.value == 'cloud',
-        onTap: () => controller.setInferenceMode('cloud'),
-      ),
     ]);
   }
 
@@ -288,81 +259,6 @@ class SettingsView extends GetView<SettingsController> {
             _confirmSaved(context, 'Stop sequences saved');
           }
         },
-      ),
-    ]);
-  }
-
-  Widget _buildUpdatesRow(BuildContext context) {
-    final updates = Get.find<UpdateService>();
-    final t = AppTokens.of(context);
-    final update = updates.availableUpdate.value;
-    final downloading = updates.state.value == UpdateState.downloading;
-    return AppRow(
-      icon: Icons.system_update_rounded,
-      title: 'App updates',
-      trailing: update != null
-          ? AppTag(
-              downloading
-                  ? '${(updates.progress.value * 100).round()}%'
-                  : '${update.version} available',
-              color: t.accent)
-          : Text('Up to date', style: t.caption.copyWith(fontSize: 14)),
-      chevron: true,
-      onTap: () => Get.to(() => _SettingsPage(
-          title: 'App updates', builder: (ctx) => _buildUpdatesGroup(ctx))),
-    );
-  }
-
-  Widget _buildUpdatesGroup(BuildContext context) {
-    final updates = Get.find<UpdateService>();
-    final update = updates.availableUpdate.value;
-    final checking = updates.state.value == UpdateState.checking;
-    final checked = updates.lastCheck.value;
-    final current = updates.currentVersion.value;
-    final String status;
-    if (update != null) {
-      status = 'You have $current · see what\'s new';
-    } else if (checked != null) {
-      status = 'Up to date · checked ${_ago(checked)}';
-    } else {
-      status = 'Not checked yet';
-    }
-    return AppGroup(dividerIndent: 60, children: [
-      AppRow(
-        icon: update != null ? Icons.download_rounded : Icons.refresh_rounded,
-        title: update != null
-            ? 'Update to ${update.version}'
-            : 'Check for updates',
-        subtitle: status,
-        trailing: checking
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2))
-            : null,
-        chevron: !checking,
-        onTap: checking
-            ? null
-            : () async {
-                if (update != null) {
-                  updates.showUpdateSheet(context);
-                  return;
-                }
-                final found = await updates.checkForUpdate(manual: true);
-                if (found != null && context.mounted) {
-                  updates.showUpdateSheet(context);
-                }
-              },
-      ),
-      AppRow(
-        icon: Icons.schedule_rounded,
-        title: 'Check automatically',
-        subtitle: 'Look for a new release once a day',
-        trailing: Switch(
-          value: updates.autoCheck.value,
-          onChanged: updates.setAutoCheck,
-        ),
-        onTap: () => updates.setAutoCheck(!updates.autoCheck.value),
       ),
     ]);
   }

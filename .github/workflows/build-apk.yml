@@ -1,0 +1,179 @@
+name: Build offline APK
+
+# Builds the signed, offline-only Android APK in the cloud and publishes it on
+# the Releases page. The build FAILS if the APK can reach the network.
+
+on:
+  push:
+    branches: [main, offline-hardening]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Least privilege: only allowed to create releases in this repo.
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.38.4'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout (with stable-diffusion.cpp submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Free disk space (native builds are large)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/node_modules || true
+          df -h /
+
+      - name: Modern glslc for llama.cpp Vulkan shaders
+        # The NDK's glslc is too old for ggml-vulkan's cooperative-matrix
+        # shaders; the plugin's CMake prefers a system glslc.
+        run: |
+          set -e
+          FT=local_plugins/llama_flutter_android/android/src/main/cpp/llama.cpp/ggml/src/ggml-vulkan/vulkan-shaders/feature-tests/coopmat.comp
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq glslc || true
+          if command -v glslc >/dev/null && glslc -fshader-stage=compute --target-env=vulkan1.3 "$FT" -o /tmp/ft.spv; then
+            echo "Ubuntu glslc supports cooperative matrix"
+            sudo ln -sf "$(command -v glslc)" /usr/local/bin/glslc
+          else
+            echo "Ubuntu glslc too old; fetching the latest LunarG Vulkan SDK glslc"
+            curl -fsSL -o /tmp/vksdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz
+            mkdir -p /tmp/vksdk && tar -xJf /tmp/vksdk.tar.xz -C /tmp/vksdk --wildcards '*/x86_64/bin/glslc'
+            sudo install -m 755 "$(find /tmp/vksdk -name glslc -type f | head -1)" /usr/local/bin/glslc
+            /usr/local/bin/glslc -fshader-stage=compute --target-env=vulkan1.3 "$FT" -o /tmp/ft.spv
+          fi
+          /usr/local/bin/glslc --version
+
+      - name: Release signing key (from repository secrets)
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASS" ]; then
+            echo "::error::Signing secrets are missing. Add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD in Settings > Secrets and variables > Actions. Refusing to ship a debug-signed APK."
+            exit 1
+          fi
+          KS_PATH="$RUNNER_TEMP/release.jks"
+          echo "$KS_B64" | base64 -d > "$KS_PATH"
+          {
+            echo "storeFile=$KS_PATH"
+            echo "storePassword=$KS_PASS"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > android/key.properties
+
+      - name: Flutter dependencies
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee pubget.log || {
+            echo "::error title=pub get failed::$(tail -40 pubget.log | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          }
+
+      - name: Static analysis (report errors as annotations)
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings > analyze.txt 2>&1 || true
+          grep -E "^\s*error " analyze.txt | head -40 > analyze_errors.txt || true
+          if [ -s analyze_errors.txt ]; then
+            echo "::error title=Dart analyzer errors::$(sed ':a;N;$!ba;s/\n/%0A/g' analyze_errors.txt)"
+          fi
+          tail -5 analyze.txt
+
+      - name: Build release APK (arm64)
+        run: |
+          set -o pipefail
+          flutter build apk --release --split-per-abi --target-platform android-arm64 2>&1 | tee build.log || {
+            grep -nE "error|Error|FAILURE|What went wrong|Exception|failed" build.log | grep -v "^.*warning" | tail -60 > build_errors.txt || true
+            echo "::error title=Build failed (filtered)::$(sed ':a;N;$!ba;s/\n/%0A/g' build_errors.txt | cut -c1-60000)"
+            echo "::error title=Build failed (tail)::$(tail -40 build.log | sed ':a;N;$!ba;s/\n/%0A/g' | cut -c1-60000)"
+            exit 1
+          }
+
+      - name: Verify the APK is offline and signed correctly
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "Using build-tools: $BT"
+          "$BT/aapt2" dump permissions "$APK" | tee permissions.txt
+          BANNED="android.permission.INTERNET android.permission.ACCESS_NETWORK_STATE android.permission.ACCESS_WIFI_STATE android.permission.RECORD_AUDIO android.permission.CAMERA android.permission.REQUEST_INSTALL_PACKAGES android.permission.MANAGE_EXTERNAL_STORAGE android.permission.READ_EXTERNAL_STORAGE android.permission.WRITE_EXTERNAL_STORAGE com.google.android.c2dm.permission.RECEIVE"
+          FAIL=0
+          for p in $BANNED; do
+            if grep -q "name='$p'" permissions.txt; then
+              echo "::error::Forbidden permission in APK: $p"
+              FAIL=1
+            fi
+          done
+          if "$BT/aapt2" dump badging "$APK" | grep -q "application-debuggable"; then
+            echo "::error::APK is debuggable"
+            FAIL=1
+          fi
+          [ "$FAIL" = 0 ] || exit 1
+          "$BT/apksigner" verify --print-certs "$APK" | tee signer.txt
+          if grep -qi "CN=Android Debug" signer.txt; then
+            echo "::error::APK is signed with a debug key"
+            exit 1
+          fi
+          mkdir -p dist
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          OUT="dist/PrivateLocal-${VERSION}-build${GITHUB_RUN_NUMBER}-arm64.apk"
+          cp "$APK" "$OUT"
+          SHA=$(sha256sum "$OUT" | awk '{print $1}')
+          CERT=$(grep -m1 "certificate SHA-256 digest:" signer.txt | sed "s/.*digest: //")
+          echo "APK_PATH=$OUT" >> "$GITHUB_ENV"
+          echo "APK_SHA256=$SHA" >> "$GITHUB_ENV"
+          echo "CERT_SHA256=$CERT" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "OK: no network permission, release-signed. SHA-256: $SHA"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: PrivateLocal-arm64-apk
+          path: ${{ env.APK_PATH }}
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/offline-hardening' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}-build{1}', env.APP_VERSION, github.run_number) }}
+          name: PrivateLocal ${{ env.APP_VERSION }} (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          files: ${{ env.APK_PATH }}
+          body: |
+            Offline build — this APK has **no INTERNET permission** (checked automatically by CI).
+
+            Install on the phone: download `PrivateLocal-…-arm64.apk` below and open it.
+
+            - APK SHA-256: `${{ env.APK_SHA256 }}`
+            - Signing certificate SHA-256: `${{ env.CERT_SHA256 }}`
+
+            Every future update must show the same signing certificate. If it ever differs, do not install it.
