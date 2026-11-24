@@ -22,7 +22,7 @@ class LocalImageService extends GetxService {
   final isUsingGpu = false.obs;
   final latestLog = ''.obs;
   final currentBackend = Backend.cpu.obs;
-  final currentQuantization = QuantizationType.q4_0.obs;
+  final currentQuantization = QuantizationType.q8_0.obs;
 
   SdIsolateProcessor? _processor;
 
@@ -128,8 +128,8 @@ class LocalImageService extends GetxService {
         savedQuantIndex < QuantizationType.values.length) {
       currentQuantization.value = QuantizationType.values[savedQuantIndex];
     }
-    // Force Q4_0 for speed — override any saved FP16 setting
-    currentQuantization.value = QuantizationType.q4_0;
+    // Q8_0: Q4_0 visibly destroys SD 1.5 output (repeating texture).
+    currentQuantization.value = QuantizationType.q8_0;
   }
 
   Future<String> loadModel(String modelPath,
